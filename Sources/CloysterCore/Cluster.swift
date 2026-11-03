@@ -1,0 +1,275 @@
+/// Pure layout model. Coordinates are top-left origin, matching the Accessibility API.
+
+public enum Axis: Sendable {
+    /// Children sit side by side and share a height.
+    case horizontal
+    /// Children are stacked and share a width.
+    case vertical
+}
+
+public enum Edge: Sendable {
+    case leading
+    case trailing
+}
+
+public struct Rect: Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    func low(_ axis: Axis) -> Double { axis == .horizontal ? x : y }
+    func extent(_ axis: Axis) -> Double { axis == .horizontal ? width : height }
+    func high(_ axis: Axis) -> Double { low(axis) + extent(axis) }
+}
+
+public struct Node<ID: Hashable>: Equatable {
+    public enum Content: Equatable {
+        case window(ID)
+        case split(Axis, [Node])
+    }
+
+    public var content: Content
+    var width: Double = 0
+    var height: Double = 0
+
+    public init(_ content: Content) {
+        self.content = content
+    }
+
+    public static func window(_ id: ID) -> Node { Node(.window(id)) }
+    public static func split(_ axis: Axis, _ children: [Node]) -> Node { Node(.split(axis, children)) }
+
+    public var windowIDs: [ID] {
+        switch content {
+        case .window(let id): return [id]
+        case .split(_, let children): return children.flatMap(\.windowIDs)
+        }
+    }
+
+    func contains(_ id: ID) -> Bool { windowIDs.contains(id) }
+
+    func extent(_ axis: Axis) -> Double { axis == .horizontal ? width : height }
+
+    mutating func setExtent(_ axis: Axis, _ value: Double) {
+        if axis == .horizontal { width = value } else { height = value }
+    }
+
+    /// Sizes this node and its descendants, dividing space evenly between children.
+    mutating func fit(width: Double, height: Double, gap: Double) {
+        self.width = width
+        self.height = height
+        guard case .split(let axis, var children) = content else { return }
+        let total = axis == .horizontal ? width : height
+        let share = (total - gap * Double(children.count - 1)) / Double(children.count)
+        for i in children.indices {
+            children[i].fit(
+                width: axis == .horizontal ? share : width,
+                height: axis == .vertical ? share : height,
+                gap: gap
+            )
+        }
+        content = .split(axis, children)
+    }
+
+    /// Changes this node's size along `axis`.
+    ///
+    /// A split running along the axis gives the whole change to one child, so its siblings keep
+    /// their size. A split running across the axis passes it to every child, because they have to
+    /// stay the same size. `target` picks the child on the path to a window, otherwise the child
+    /// at `edge` absorbs the change.
+    mutating func grow(_ axis: Axis, by delta: Double, at edge: Edge, toward target: ID? = nil) {
+        setExtent(axis, extent(axis) + delta)
+        guard case .split(let splitAxis, var children) = content else { return }
+        if splitAxis == axis {
+            let i = childIndex(children, axis: edge, toward: target)
+            children[i].grow(axis, by: delta, at: edge, toward: target)
+        } else {
+            for i in children.indices {
+                let onPath = target.map(children[i].contains) ?? false
+                children[i].grow(axis, by: delta, at: edge, toward: onPath ? target : nil)
+            }
+        }
+        content = .split(splitAxis, children)
+    }
+
+    /// How far `grow` can shrink this node before a window drops below `minSize`.
+    func slack(_ axis: Axis, at edge: Edge, toward target: ID? = nil, minSize: Double) -> Double {
+        guard case .split(let splitAxis, let children) = content else {
+            return extent(axis) - minSize
+        }
+        if splitAxis == axis {
+            let i = childIndex(children, axis: edge, toward: target)
+            return children[i].slack(axis, at: edge, toward: target, minSize: minSize)
+        }
+        return children.map { child in
+            let onPath = target.map(child.contains) ?? false
+            return child.slack(axis, at: edge, toward: onPath ? target : nil, minSize: minSize)
+        }.min() ?? 0
+    }
+
+    private func childIndex(_ children: [Node], axis edge: Edge, toward target: ID?) -> Int {
+        if let target, let i = children.firstIndex(where: { $0.contains(target) }) {
+            return i
+        }
+        return edge == .leading ? 0 : children.count - 1
+    }
+}
+
+public struct Divider: Equatable, Sendable {
+    /// Child indices leading from the root to the split that owns this divider.
+    public var path: [Int]
+    /// The divider sits between children `index` and `index + 1`.
+    public var index: Int
+    public var axis: Axis
+    public var frame: Rect
+}
+
+public struct Cluster<ID: Hashable>: Equatable {
+    public private(set) var root: Node<ID>
+    public private(set) var x: Double
+    public private(set) var y: Double
+    public let gap: Double
+    public let minSize: Double
+
+    public init(root: Node<ID>, frame: Rect, gap: Double = 12, minSize: Double = 120) {
+        self.root = root
+        self.x = frame.x
+        self.y = frame.y
+        self.gap = gap
+        self.minSize = minSize
+        self.root.fit(width: frame.width, height: frame.height, gap: gap)
+    }
+
+    public var frames: [ID: Rect] {
+        var result: [ID: Rect] = [:]
+        walk(root, x: x, y: y, path: []) { node, rect, _ in
+            if case .window(let id) = node.content { result[id] = rect }
+        }
+        return result
+    }
+
+    public var dividers: [Divider] {
+        var result: [Divider] = []
+        walk(root, x: x, y: y, path: []) { node, rect, path in
+            guard case .split(let axis, let children) = node.content else { return }
+            var offset = 0.0
+            for (i, child) in children.dropLast().enumerated() {
+                offset += child.extent(axis)
+                let frame = axis == .horizontal
+                    ? Rect(x: rect.x + offset, y: rect.y, width: gap, height: rect.height)
+                    : Rect(x: rect.x, y: rect.y + offset, width: rect.width, height: gap)
+                result.append(Divider(path: path, index: i, axis: axis, frame: frame))
+                offset += gap
+            }
+        }
+        return result
+    }
+
+    private func walk(
+        _ node: Node<ID>, x: Double, y: Double, path: [Int],
+        _ visit: (Node<ID>, Rect, [Int]) -> Void
+    ) {
+        visit(node, Rect(x: x, y: y, width: node.width, height: node.height), path)
+        guard case .split(let axis, let children) = node.content else { return }
+        var x = x
+        var y = y
+        for (i, child) in children.enumerated() {
+            walk(child, x: x, y: y, path: path + [i], visit)
+            if axis == .horizontal { x += child.width + gap } else { y += child.height + gap }
+        }
+    }
+
+    /// Moves a divider, keeping the combined size of its neighbours. Returns the distance moved.
+    @discardableResult
+    public mutating func moveDivider(_ divider: Divider, by delta: Double) -> Double {
+        var applied = 0.0
+        let minSize = minSize
+        Self.withNode(&root, at: divider.path[...]) { node in
+            guard case .split(let axis, var children) = node.content else { return }
+            let i = divider.index
+            let lower = -children[i].slack(axis, at: .trailing, minSize: minSize)
+            let upper = children[i + 1].slack(axis, at: .leading, minSize: minSize)
+            applied = min(max(delta, lower), upper)
+            children[i].grow(axis, by: applied, at: .trailing)
+            children[i + 1].grow(axis, by: -applied, at: .leading)
+            node.content = .split(axis, children)
+        }
+        return applied
+    }
+
+    private static func withNode(
+        _ node: inout Node<ID>, at path: ArraySlice<Int>, _ body: (inout Node<ID>) -> Void
+    ) {
+        guard let next = path.first else { return body(&node) }
+        guard case .split(let axis, var children) = node.content else { return }
+        withNode(&children[next], at: path.dropFirst(), body)
+        node.content = .split(axis, children)
+    }
+
+    /// Adopts a frame the user gave a window, by moving the cluster and resizing as needed.
+    ///
+    /// Growing a window only affects windows that have to match it: its column for width, its row
+    /// for height. Everything else keeps its size, so the cluster's outer size changes instead.
+    public mutating func update(_ id: ID, to frame: Rect) {
+        guard let old = frames[id] else { return }
+        let horizontal = adopt(id, .horizontal, old: old, new: frame)
+        let vertical = adopt(id, .vertical, old: old, new: frame)
+        guard let current = frames[id] else { return }
+        x += horizontal - (horizontal == frame.x ? current.x : current.x + current.width)
+        y += vertical - (vertical == frame.y ? current.y : current.y + current.height)
+    }
+
+    /// Applies the size change along one axis and returns the coordinate of the edge that stayed
+    /// put, which the cluster is then re-anchored to.
+    private mutating func adopt(_ id: ID, _ axis: Axis, old: Rect, new: Rect) -> Double {
+        let edge: Edge = abs(new.low(axis) - old.low(axis)) > 0.5 ? .leading : .trailing
+        let delta = new.extent(axis) - old.extent(axis)
+        guard delta != 0 else { return new.low(axis) }
+        let lower = -root.slack(axis, at: edge, toward: id, minSize: minSize)
+        root.grow(axis, by: max(delta, lower), at: edge, toward: id)
+        return edge == .leading ? new.high(axis) : new.low(axis)
+    }
+
+    /// Removes a window, giving its space to the neighbouring window. Returns false if nothing
+    /// would remain.
+    public mutating func remove(_ id: ID) -> Bool {
+        guard root.windowIDs != [id] else { return false }
+        let before = frames[id]
+        Self.remove(id, from: &root, gap: gap)
+        if let before, !root.contains(id), frames.isEmpty == false {
+            x = min(x, before.x)
+            y = min(y, before.y)
+        }
+        return true
+    }
+
+    private static func remove(_ id: ID, from node: inout Node<ID>, gap: Double) {
+        guard case .split(let axis, var children) = node.content else { return }
+        guard let i = children.firstIndex(where: { $0.contains(id) }) else { return }
+        if children[i].windowIDs != [id] {
+            remove(id, from: &children[i], gap: gap)
+            node.content = .split(axis, children)
+            return
+        }
+        let freed = children[i].extent(axis) + gap
+        children.remove(at: i)
+        if i < children.count {
+            children[i].grow(axis, by: freed, at: .leading)
+        } else {
+            children[i - 1].grow(axis, by: freed, at: .trailing)
+        }
+        if children.count == 1 {
+            node = children[0]
+        } else {
+            node.content = .split(axis, children)
+        }
+    }
+}
