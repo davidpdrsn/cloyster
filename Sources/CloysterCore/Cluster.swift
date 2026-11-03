@@ -273,3 +273,47 @@ public struct Cluster<ID: Hashable>: Equatable {
         }
     }
 }
+
+extension Node {
+    /// Rebuilds the tree with new window IDs. Returns nil if any window can't be mapped.
+    public func mapWindows<T>(_ transform: (ID) -> T?) -> Node<T>? {
+        switch content {
+        case .window(let id):
+            return transform(id).map(Node<T>.window)
+        case .split(let axis, let children):
+            var mapped: [Node<T>] = []
+            for child in children {
+                guard let node = child.mapWindows(transform) else { return nil }
+                mapped.append(node)
+            }
+            return .split(axis, mapped)
+        }
+    }
+}
+
+extension Node where ID == String {
+    /// Parses a layout such as `h(Safari,v(Terminal,Notes))`.
+    public static func parse(_ text: String) -> Node? {
+        var rest = text[...]
+        guard let node = parseNode(&rest), rest.isEmpty else { return nil }
+        return node
+    }
+
+    private static func parseNode(_ rest: inout Substring) -> Node? {
+        for (prefix, axis) in [("h(", Axis.horizontal), ("v(", Axis.vertical)] where rest.hasPrefix(prefix) {
+            rest = rest.dropFirst(2)
+            var children: [Node] = []
+            while true {
+                guard let child = parseNode(&rest) else { return nil }
+                children.append(child)
+                guard let next = rest.popFirst() else { return nil }
+                if next == ")" { break }
+                if next != "," { return nil }
+            }
+            return children.count > 1 ? .split(axis, children) : nil
+        }
+        let name = rest.prefix { $0 != "," && $0 != ")" && $0 != "(" }
+        rest = rest.dropFirst(name.count)
+        return name.isEmpty ? nil : .window(String(name))
+    }
+}

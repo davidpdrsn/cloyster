@@ -138,3 +138,24 @@ private func grid() -> Cluster<String> {
     let removed = c.remove("a")
     #expect(!removed)
 }
+
+@Test func parsesNestedLayout() {
+    let node = Node<String>.parse("h(Safari,v(Google Chrome,123))")
+    #expect(node?.windowIDs == ["Safari", "Google Chrome", "123"])
+    guard case .split(.horizontal, let children)? = node?.content else {
+        Issue.record("expected a horizontal split")
+        return
+    }
+    guard case .split(.vertical, _) = children[1].content else {
+        Issue.record("expected a vertical split")
+        return
+    }
+}
+
+@Test func rejectsMalformedLayouts() {
+    #expect(Node<String>.parse("h(a,b") == nil)
+    #expect(Node<String>.parse("h(a)") == nil)
+    #expect(Node<String>.parse("h(a,)") == nil)
+    #expect(Node<String>.parse("h(a,b)c") == nil)
+    #expect(Node<String>.parse("") == nil)
+}
