@@ -6,9 +6,10 @@ with a draggable divider between them, and move together.
 ## Running
 
 ```sh
-scripts/bundle.sh
-open build/Cloyster.app
+just install
 ```
+
+This builds the app, installs it into `/Applications` and restarts it.
 
 Cloyster lives in the menu bar and asks for Accessibility access on first launch. It asks again after
 a rebuild, because the ad-hoc signature changes.
