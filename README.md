@@ -14,8 +14,8 @@ This builds the app, installs it into `/Applications` and restarts it.
 Cloyster lives in the menu bar and asks for Accessibility access on first launch. The first build
 adds a self-signed certificate to your login keychain, so the permission survives rebuilds.
 
-Hold Cmd and drag a window by its title bar, with the cursor near an edge of another window. A preview
-shows where it will land.
+Hold Cmd and drag a window by its title bar, with the cursor near an edge of another window. Cmd can
+go down before or during the drag. A preview shows where it will land.
 
 - Release to join. Near a cluster's outer edge, the window runs along that whole side.
 - Let go of Cmd first to cancel.

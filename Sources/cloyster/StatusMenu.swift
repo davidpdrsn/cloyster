@@ -38,7 +38,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(label("⌘-drag a window onto another to join"))
+        menu.addItem(label("⌘-drag a window to another's edge to join"))
         menu.addItem(label("⌘-drag it away to leave"))
         menu.addItem(.separator())
         menu.addItem(action("Quit Cloyster", #selector(quit)))

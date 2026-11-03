@@ -28,10 +28,12 @@ final class Manager {
     private var joinTimer: Timer?
     private var idleTimer: Timer?
     private var join: JoinGesture?
+    /// The window under the cursor when the mouse went down, until a join claims it.
+    private var pressed: WindowHit?
     private var lastFront: CGWindowID?
 
     func start() {
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] in self?.mouseDown($0) }
+        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in self?.mouseDown() }
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in self?.mouseUp() }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -97,6 +99,7 @@ final class Manager {
 
     private func poll() {
         let gesture = dragTimer != nil
+        if gesture { beginJoinIfCommandHeld() }
         controllers.forEach { $0.poll(gesture: gesture) }
         sweep()
         if !gesture { raiseFrontCluster() }
@@ -118,11 +121,12 @@ final class Manager {
         controllers.filter { $0.windows.count < 2 }.forEach(dissolve)
     }
 
-    private func mouseDown(_ event: NSEvent) {
+    private func mouseDown() {
         controllers.forEach { $0.beginGesture() }
+        pressed = cursor.flatMap { topWindow(atX: $0.x, y: $0.y) }
         dragTimer?.invalidate()
         dragTimer = schedule(interval: 1.0 / 120) { [weak self] in self?.poll() }
-        if event.modifierFlags.contains(.command) { beginJoin() }
+        beginJoinIfCommandHeld()
     }
 
     private func mouseUp() {
@@ -133,6 +137,7 @@ final class Manager {
             tickJoin()
             finishJoin()
         }
+        pressed = nil
         dragTimer?.invalidate()
         dragTimer = nil
         controllers.forEach { $0.endGesture() }
@@ -141,14 +146,19 @@ final class Manager {
 
     private var cursor: CGPoint? { CGEvent(source: nil)?.location }
 
-    private var commandHeld: Bool { NSEvent.modifierFlags.contains(.command) }
+    /// Reads the keyboard rather than mouse events, because tools that rewrite mouse input can
+    /// drop the flag, and Cmd may go down after the drag has started. Those rewritten events can
+    /// clear the session's flags too, so the hardware state counts as well.
+    private var commandHeld: Bool {
+        [.combinedSessionState, .hidSystemState].contains {
+            CGEventSource.flagsState($0).contains(.maskCommand)
+        }
+    }
 
-    private func beginJoin() {
-        guard
-            let cursor,
-            let hit = topWindow(atX: cursor.x, y: cursor.y),
-            let window = AXWindow.find(id: hit.id, pid: hit.pid)
-        else { return }
+    private func beginJoinIfCommandHeld() {
+        guard join == nil, commandHeld, let hit = pressed else { return }
+        pressed = nil
+        guard let window = AXWindow.find(id: hit.id, pid: hit.pid) else { return }
         controller(containing: hit.id)?.isPaused = true
         join = JoinGesture(window: window, start: hit.frame)
         joinTimer = schedule(interval: 1.0 / 30) { [weak self] in self?.tickJoin() }
