@@ -159,3 +159,105 @@ private func grid() -> Cluster<String> {
     #expect(Node<String>.parse("h(a,b)c") == nil)
     #expect(Node<String>.parse("") == nil)
 }
+
+private let incoming = Rect(x: 900, y: 500, width: 300, height: 200)
+
+@Test func attachingKeepsTargetAndTakesItsHeight() {
+    var c = Cluster<String>(root: .window("a"), frame: Rect(x: 100, y: 100, width: 500, height: 600))
+    c.attach("n", size: incoming, at: Drop(target: "a", side: .right))
+    let f = c.frames
+    #expect(f["a"] == Rect(x: 100, y: 100, width: 500, height: 600))
+    #expect(f["n"] == Rect(x: 612, y: 100, width: 300, height: 600))
+}
+
+@Test func attachingLeftKeepsTargetInPlace() {
+    var c = Cluster<String>(root: .window("a"), frame: Rect(x: 500, y: 100, width: 500, height: 600))
+    c.attach("n", size: incoming, at: Drop(target: "a", side: .left))
+    let f = c.frames
+    #expect(f["a"] == Rect(x: 500, y: 100, width: 500, height: 600))
+    #expect(f["n"] == Rect(x: 188, y: 100, width: 300, height: 600))
+}
+
+@Test func attachingBelowKeepsHeightAndTakesWidth() {
+    var c = Cluster<String>(root: .window("a"), frame: Rect(x: 100, y: 100, width: 500, height: 300))
+    c.attach("n", size: incoming, at: Drop(target: "a", side: .bottom))
+    let f = c.frames
+    #expect(f["a"] == Rect(x: 100, y: 100, width: 500, height: 300))
+    #expect(f["n"] == Rect(x: 100, y: 412, width: 500, height: 200))
+}
+
+@Test func attachingInsideRowPushesLaterWindows() {
+    var c = pair()
+    c.attach("n", size: incoming, at: Drop(target: "a", side: .right))
+    let f = c.frames
+    #expect(f["a"] == Rect(x: 100, y: 100, width: 500, height: 600))
+    #expect(f["n"] == Rect(x: 612, y: 100, width: 300, height: 600))
+    #expect(f["b"] == Rect(x: 924, y: 100, width: 500, height: 600))
+    #expect(c.dividers.count == 2)
+    #expect(c.dividers.allSatisfy { $0.path.isEmpty })
+}
+
+@Test func attachingBesideStackedWindowWidensColumn() {
+    var c = grid()
+    let a = c.frames["a"]!
+    let b = c.frames["b"]!
+    c.attach("n", size: incoming, at: Drop(target: "a", side: .right))
+    let f = c.frames
+    #expect(f["a"] == a)
+    #expect(f["n"]?.height == a.height)
+    #expect(f["c"]?.width == a.width + 312)
+    #expect(f["b"]?.x == b.x + 312)
+    #expect(f["b"]?.width == b.width)
+}
+
+@Test func attachingAlongOuterSideSpansCluster() {
+    var c = pair()
+    c.attach("n", size: incoming, at: Drop(target: nil, side: .bottom))
+    let f = c.frames
+    #expect(f["n"] == Rect(x: 100, y: 712, width: 1012, height: 200))
+    #expect(f["a"]?.height == 600)
+}
+
+@Test func attachingAlongOuterLeftKeepsExistingWindowsInPlace() {
+    var c = pair()
+    let before = c.frames
+    c.attach("n", size: incoming, at: Drop(target: nil, side: .left))
+    let f = c.frames
+    #expect(f["a"] == before["a"])
+    #expect(f["b"] == before["b"])
+    #expect(f["n"] == Rect(x: -212, y: 100, width: 300, height: 600))
+}
+
+@Test func attachedWindowHonoursMinSize() {
+    var c = Cluster<String>(root: .window("a"), frame: Rect(x: 0, y: 0, width: 500, height: 600))
+    c.attach("n", size: Rect(x: 0, y: 0, width: 40, height: 40), at: Drop(target: "a", side: .right))
+    #expect(c.frames["n"]?.width == 120)
+}
+
+@Test func dropPicksOneSideOfTheWindowUnderTheCursor() {
+    let c = Cluster<String>(root: .window("a"), frame: Rect(x: 0, y: 0, width: 1000, height: 600))
+    #expect(c.drop(x: 950, y: 300, over: "a") == Drop(target: "a", side: .right))
+    #expect(c.drop(x: 50, y: 300, over: "a") == Drop(target: "a", side: .left))
+    #expect(c.drop(x: 500, y: 20, over: "a") == Drop(target: "a", side: .top))
+    #expect(c.drop(x: 500, y: 580, over: "a") == Drop(target: "a", side: .bottom))
+}
+
+@Test func dropNearOuterEdgeTargetsWholeSide() {
+    let c = pair()
+    #expect(c.drop(x: 400, y: 680, over: "a") == Drop(target: nil, side: .bottom))
+    #expect(c.drop(x: 400, y: 620, over: "a") == Drop(target: "a", side: .bottom))
+}
+
+@Test func previewDoesNotChangeCluster() {
+    let c = pair()
+    let preview = c.preview("n", size: incoming, at: Drop(target: "b", side: .right))
+    #expect(preview == Rect(x: 1124, y: 100, width: 300, height: 600))
+    #expect(c.frames.count == 2)
+}
+
+@Test func previewOfWindowAlreadyInClusterMovesIt() {
+    var c = pair()
+    c.attach("n", size: incoming, at: Drop(target: "b", side: .right))
+    let preview = c.preview("n", size: incoming, at: Drop(target: "a", side: .left))
+    #expect(preview == Rect(x: -212, y: 100, width: 300, height: 600))
+}

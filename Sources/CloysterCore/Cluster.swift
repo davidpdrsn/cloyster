@@ -12,6 +12,16 @@ public enum Edge: Sendable {
     case trailing
 }
 
+public enum Side: Sendable {
+    case left
+    case right
+    case top
+    case bottom
+
+    var axis: Axis { self == .left || self == .right ? .horizontal : .vertical }
+    var edge: Edge { self == .left || self == .top ? .leading : .trailing }
+}
+
 public struct Rect: Equatable, Sendable {
     public var x: Double
     public var y: Double
@@ -23,6 +33,24 @@ public struct Rect: Equatable, Sendable {
         self.y = y
         self.width = width
         self.height = height
+    }
+
+    public func contains(x: Double, y: Double) -> Bool {
+        x >= self.x && x < self.x + width && y >= self.y && y < self.y + height
+    }
+
+    /// The edge closest to a point.
+    public func nearestSide(x: Double, y: Double) -> Side {
+        distances(x: x, y: y).min { $0.distance < $1.distance }?.side ?? .right
+    }
+
+    fileprivate func distances(x: Double, y: Double) -> [(side: Side, distance: Double)] {
+        [
+            (.left, abs(x - self.x)),
+            (.right, abs(self.x + width - x)),
+            (.top, abs(y - self.y)),
+            (.bottom, abs(self.y + height - y)),
+        ]
     }
 
     public func low(_ axis: Axis) -> Double { axis == .horizontal ? x : y }
@@ -271,6 +299,111 @@ public struct Cluster<ID: Hashable>: Equatable {
         } else {
             node.content = .split(axis, children)
         }
+    }
+}
+
+/// Where a dragged window would join a cluster.
+public struct Drop<ID: Hashable>: Equatable {
+    /// The window to join next to, or nil to run along a whole side of the cluster.
+    public var target: ID?
+    public var side: Side
+
+    public init(target: ID?, side: Side) {
+        self.target = target
+        self.side = side
+    }
+}
+
+extension Cluster {
+    /// How close to a cluster's outer edge the cursor must be to join the whole side.
+    static var outerMargin: Double { 40 }
+
+    public var bounds: Rect { Rect(x: x, y: y, width: root.width, height: root.height) }
+
+    /// Picks where a window dropped at a point joins, given the window under the cursor.
+    public func drop(x: Double, y: Double, over id: ID) -> Drop<ID>? {
+        guard let frame = frames[id] else { return nil }
+        if root.windowIDs.count > 1,
+            let outer = bounds.distances(x: x, y: y).min(by: { $0.distance < $1.distance }),
+            outer.distance <= Self.outerMargin
+        {
+            return Drop(target: nil, side: outer.side)
+        }
+        return Drop(target: id, side: frame.nearestSide(x: x, y: y))
+    }
+
+    /// Adds a window, which keeps its size along the side it joins and matches the rest of the
+    /// cluster across it. The window it joins stays put, so the cluster grows.
+    public mutating func attach(_ id: ID, size: Rect, at drop: Drop<ID>) {
+        let axis = drop.side.axis
+        let length = max(size.extent(axis), minSize)
+        let anchor = drop.target.flatMap { frames[$0] }
+        let leading = drop.side.edge == .leading
+        if let target = drop.target {
+            root.grow(axis, by: length + gap, at: drop.side.edge, toward: target)
+            Self.insert(id, length: length, next: target, side: drop.side, gap: gap, in: &root)
+        } else {
+            Self.wrap(id, length: length, side: drop.side, gap: gap, root: &root)
+            if leading {
+                if axis == .horizontal { x -= length + gap } else { y -= length + gap }
+            }
+        }
+        if let anchor, let target = drop.target, let current = frames[target] {
+            x += anchor.x - current.x
+            y += anchor.y - current.y
+        }
+    }
+
+    /// The frame a window would get from a drop, without changing the cluster.
+    public func preview(_ id: ID, size: Rect, at drop: Drop<ID>) -> Rect? {
+        var copy = self
+        if frames[id] != nil, !copy.remove(id) { return nil }
+        copy.attach(id, size: size, at: drop)
+        return copy.frames[id]
+    }
+
+    /// Splits the target window's space, which has already grown to fit the new window.
+    private static func insert(
+        _ id: ID, length: Double, next target: ID, side: Side, gap: Double, in node: inout Node<ID>
+    ) {
+        switch node.content {
+        case .window:
+            var existing = node
+            existing.setExtent(side.axis, node.extent(side.axis) - length - gap)
+            var added = Node<ID>.window(id)
+            added.width = node.width
+            added.height = node.height
+            added.setExtent(side.axis, length)
+            node.content = .split(side.axis, side.edge == .leading ? [added, existing] : [existing, added])
+        case .split(let axis, var children):
+            guard let i = children.firstIndex(where: { $0.contains(target) }) else { return }
+            var child = children[i]
+            let wasWindow = child.windowIDs == [target]
+            insert(id, length: length, next: target, side: side, gap: gap, in: &child)
+            if wasWindow, axis == side.axis, case .split(_, let pair) = child.content {
+                children.replaceSubrange(i...i, with: pair)
+            } else {
+                children[i] = child
+            }
+            node.content = .split(axis, children)
+        }
+    }
+
+    /// Adds a window along a whole side of the cluster.
+    private static func wrap(_ id: ID, length: Double, side: Side, gap: Double, root: inout Node<ID>) {
+        var added = Node<ID>.window(id)
+        added.width = root.width
+        added.height = root.height
+        added.setExtent(side.axis, length)
+        let extent = root.extent(side.axis) + length + gap
+        if case .split(let axis, var children) = root.content, axis == side.axis {
+            children.insert(added, at: side.edge == .leading ? 0 : children.count)
+            root.content = .split(axis, children)
+        } else {
+            let existing = root
+            root.content = .split(side.axis, side.edge == .leading ? [added, existing] : [existing, added])
+        }
+        root.setExtent(side.axis, extent)
     }
 }
 
