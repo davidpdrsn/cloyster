@@ -26,13 +26,40 @@ final class DividerPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Takes a frame in top-left coordinates.
     func place(_ rect: Rect) {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        setFrame(
-            NSRect(x: rect.x, y: primaryHeight - rect.y - rect.height, width: rect.width, height: rect.height),
-            display: true
-        )
+        setFrame(screenRect(rect), display: true)
+    }
+}
+
+/// Converts a top-left origin frame to AppKit's bottom-left screen coordinates.
+func screenRect(_ rect: Rect) -> NSRect {
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+    return NSRect(x: rect.x, y: primaryHeight - rect.y - rect.height, width: rect.width, height: rect.height)
+}
+
+/// Shows where a dragged window will land.
+final class JoinPreview: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        ignoresMouseEvents = true
+        level = .floating
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 12
+        view.layer?.borderWidth = 2
+        view.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        view.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+        contentView = view
+    }
+
+    func show(_ rect: Rect) {
+        setFrame(screenRect(rect), display: true)
+        orderFront(nil)
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the prototype exists to find out: how far windows fall behind, and which apps refuse sizes.
-struct Stats {
+final class Stats {
     struct App {
         var writes = 0
         var lagMilliseconds: [Double] = []

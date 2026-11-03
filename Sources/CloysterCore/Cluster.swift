@@ -318,11 +318,21 @@ extension Cluster {
     /// How close to a cluster's outer edge the cursor must be to join the whole side.
     static var outerMargin: Double { 40 }
 
+    /// How close to a window's edge the cursor must be to join it. The middle of a window never
+    /// joins, because maximized windows sit behind almost everything and would otherwise catch
+    /// every drop.
+    static var joinMargin: Double { 80 }
+
     public var bounds: Rect { Rect(x: x, y: y, width: root.width, height: root.height) }
 
-    /// Picks where a window dropped at a point joins, given the window under the cursor.
+    /// Picks where a window dropped at a point joins, given the window under the cursor. Returns
+    /// nil if the point is too far from that window's edges.
     public func drop(x: Double, y: Double, over id: ID) -> Drop<ID>? {
-        guard let frame = frames[id] else { return nil }
+        guard
+            let frame = frames[id],
+            let nearest = frame.distances(x: x, y: y).map(\.distance).min(),
+            nearest <= Self.joinMargin
+        else { return nil }
         if root.windowIDs.count > 1,
             let outer = bounds.distances(x: x, y: y).min(by: { $0.distance < $1.distance }),
             outer.distance <= Self.outerMargin

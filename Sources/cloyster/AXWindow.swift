@@ -19,8 +19,14 @@ struct AXWindow: @unchecked Sendable {
             .flatMap(windows)
     }
 
+    /// A specific standard window, or nil if it isn't one we can manage.
+    static func find(id: CGWindowID, pid: pid_t) -> AXWindow? {
+        NSRunningApplication(processIdentifier: pid).flatMap { windows(of: $0).first { $0.id == id } }
+    }
+
     private static func windows(of app: NSRunningApplication) -> [AXWindow] {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
         guard let elements: [AXUIElement] = attribute(appElement, kAXWindowsAttribute) else { return [] }
         return elements.compactMap { element in
             var id: CGWindowID = 0
@@ -49,6 +55,10 @@ struct AXWindow: @unchecked Sendable {
         AXValueGetValue(position, .cgPoint, &point)
         AXValueGetValue(size, .cgSize, &extent)
         return Rect(x: point.x, y: point.y, width: extent.width, height: extent.height)
+    }
+
+    func raise() {
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }
 
     func setPosition(of frame: Rect) {
@@ -120,4 +130,37 @@ func frontmostWindow(of ids: Set<CGWindowID>) -> CGWindowID? {
         return nil
     }
     return infos.lazy.compactMap { $0[kCGWindowNumber] as? CGWindowID }.first(where: ids.contains)
+}
+
+struct WindowHit {
+    let id: CGWindowID
+    let pid: pid_t
+    let frame: Rect
+}
+
+/// Visible normal windows, front to back, leaving out our own.
+func normalWindows() -> [WindowHit] {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
+        return []
+    }
+    let ownPID = ProcessInfo.processInfo.processIdentifier
+    return infos.compactMap { info in
+        guard
+            info[kCGWindowLayer] as? Int == 0,
+            let id = info[kCGWindowNumber] as? CGWindowID,
+            let pid = info[kCGWindowOwnerPID] as? pid_t, pid != ownPID,
+            let bounds = info[kCGWindowBounds],
+            let rect = CGRect(dictionaryRepresentation: bounds as! CFDictionary)
+        else { return nil }
+        return WindowHit(
+            id: id, pid: pid,
+            frame: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
+        )
+    }
+}
+
+/// The frontmost normal window at a point.
+func topWindow(atX x: Double, y: Double, excluding excluded: CGWindowID? = nil) -> WindowHit? {
+    normalWindows().first { $0.id != excluded && $0.frame.contains(x: x, y: y) }
 }

@@ -4,11 +4,15 @@ import CloysterCore
 
 let usage = """
     usage:
+      cloyster
       cloyster list
       cloyster run <layout> [--frame x,y,width,height]
 
-    A layout nests h(...) for side by side and v(...) for stacked. Leaves are window IDs from
-    `cloyster list`, or app names, which take that app's next unused window:
+    With no arguments, runs as a menu bar app. Hold Cmd and drag a window onto another to join them.
+
+    `run` starts with a cluster already in place. A layout nests h(...) for side by side and v(...)
+    for stacked. Leaves are window IDs from `cloyster list`, or app names, which take that app's next
+    unused window:
 
       cloyster run 'h(Safari,v(Terminal,Notes))'
 
@@ -64,31 +68,56 @@ func run(layout: String, frame: Rect) -> Never {
     }
     guard let root else { fail("invalid layout: \(layout)") }
 
+    let manager = Manager()
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let controller = Controller(cluster: Cluster(root: root, frame: frame), windows: chosen)
-    controller.start()
+    manager.start()
+    manager.add(Cluster(root: root, frame: frame), windows: chosen)
+    runUntilSignalled(manager)
+}
 
+func runUntilSignalled(_ manager: Manager) -> Never {
     var sources: [DispatchSourceSignal] = []
     for number in [SIGINT, SIGTERM] {
         signal(number, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
-            controller.stop()
+            manager.stop()
             exit(0)
         }
         source.resume()
         sources.append(source)
     }
-    withExtendedLifetime(sources) { app.run() }
+    withExtendedLifetime(sources) { NSApplication.shared.run() }
     exit(0)
 }
+
+func runMenuBarApp() -> Never {
+    let manager = Manager()
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let menu = StatusMenu(manager: manager, isTrusted: AXIsProcessTrusted)
+
+    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    if AXIsProcessTrustedWithOptions(prompt) {
+        manager.start()
+    } else {
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+            guard AXIsProcessTrusted() else { return }
+            timer.invalidate()
+            manager.start()
+        }
+    }
+    withExtendedLifetime(menu) { runUntilSignalled(manager) }
+}
+
+let arguments = Array(CommandLine.arguments.dropFirst())
+guard !arguments.isEmpty else { runMenuBarApp() }
 
 guard AXIsProcessTrusted() else {
     fail("grant Accessibility access to your terminal in System Settings > Privacy & Security")
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "list":
     list()

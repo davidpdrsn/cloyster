@@ -261,3 +261,10 @@ private let incoming = Rect(x: 900, y: 500, width: 300, height: 200)
     let preview = c.preview("n", size: incoming, at: Drop(target: "a", side: .left))
     #expect(preview == Rect(x: -212, y: 100, width: 300, height: 600))
 }
+
+@Test func dropInMiddleOfWindowJoinsNothing() {
+    let c = Cluster<String>(root: .window("a"), frame: Rect(x: 0, y: 0, width: 1000, height: 600))
+    #expect(c.drop(x: 500, y: 300, over: "a") == nil)
+    #expect(c.drop(x: 81, y: 300, over: "a") == nil)
+    #expect(c.drop(x: 80, y: 300, over: "a") == Drop(target: "a", side: .left))
+}

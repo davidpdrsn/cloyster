@@ -1,86 +1,68 @@
 import AppKit
 import CloysterCore
 
-/// Keeps real windows in step with a cluster.
+extension Rect {
+    func differs(from other: Rect) -> Bool {
+        abs(x - other.x) > 0.5 || abs(y - other.y) > 0.5
+            || abs(width - other.width) > 0.5 || abs(height - other.height) > 0.5
+    }
+}
+
+/// Keeps one cluster's real windows in step with its layout.
 ///
 /// While the mouse is down the first window to change becomes the leader and everything else
 /// follows it. The leader is never written to mid-gesture because the user is driving it.
 final class Controller {
-    private var cluster: Cluster<CGWindowID>
-    private var windows: [CGWindowID: AXWindow]
-    private var writers: [pid_t: Writer] = [:]
+    private(set) var cluster: Cluster<CGWindowID>
+    private(set) var windows: [CGWindowID: AXWindow]
+    private let writer: (AXWindow) -> Writer
+    private let stats: Stats
     private var panels: [DividerPanel] = []
-    private let enhancedUserInterface = EnhancedUserInterface()
-    private var stats = Stats()
+    private let raiseQueue = DispatchQueue(label: "cloyster.raise", qos: .userInteractive)
 
     /// Last frame we asked for, or saw the user set, per window.
     private var written: [CGWindowID: Rect] = [:]
     /// What windows settled on after our writes, which can differ if they refuse a size.
     private var settled: [CGWindowID: Rect] = [:]
     private var leader: CGWindowID?
-    private var dragTimer: Timer?
-    private var idleTimer: Timer?
     private var draggingDivider = false
     private var lastDivider: Divider?
     /// Windows whose refused size has been adopted since the last gesture. Each gets one turn, so
     /// two windows that snap to different sizes can't chase each other forever.
     private var reconciled: Set<CGWindowID> = []
 
-    init(cluster: Cluster<CGWindowID>, windows: [AXWindow]) {
+    /// Stops following windows, for when one is being dragged out of the cluster.
+    var isPaused = false
+
+    init(cluster: Cluster<CGWindowID>, windows: [AXWindow], stats: Stats, writer: @escaping (AXWindow) -> Writer) {
         self.cluster = cluster
         self.windows = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        self.stats = stats
+        self.writer = writer
+    }
+
+    var name: String {
+        cluster.root.windowIDs.compactMap { windows[$0]?.appName }.joined(separator: " + ")
     }
 
     func start() {
-        for pid in Set(windows.values.map(\.pid)) {
-            enhancedUserInterface.disable(pid: pid)
-            let name = windows.values.first { $0.pid == pid }?.appName ?? ""
-            writers[pid] = Writer(label: "\(pid)") { [weak self] completion in
-                self?.record(completion, app: "\(name) (\(pid))")
-            }
-        }
         push()
         syncPanels()
         restack()
-
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in self?.mouseDown() }
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in self?.mouseUp() }
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.restack() }
-
-        idleTimer = schedule(interval: 0.2)
     }
 
-    func stop() {
-        enhancedUserInterface.restore()
-        let coalesced = writers.values.reduce(0) { $0 + $1.coalesced }
-        print(stats.report(coalesced: coalesced))
+    func close() {
+        panels.forEach { $0.close() }
+        panels = []
     }
 
-    private func schedule(interval: TimeInterval) -> Timer {
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.poll() }
-        RunLoop.main.add(timer, forMode: .common)
-        return timer
-    }
-
-    private func mouseDown() {
+    func beginGesture() {
         leader = nil
-        beginGesture()
-        dragTimer?.invalidate()
-        dragTimer = schedule(interval: 1.0 / 120)
-    }
-
-    private func beginGesture() {
         lastDivider = nil
         reconciled = []
     }
 
-    private func mouseUp() {
-        guard dragTimer != nil else { return }
-        poll()
-        dragTimer?.invalidate()
-        dragTimer = nil
+    func endGesture() {
         if leader != nil {
             leader = nil
             push()
@@ -89,15 +71,14 @@ final class Controller {
         restack()
     }
 
-    private func poll() {
-        guard !draggingDivider else { return }
+    func poll(gesture: Bool) {
+        guard !draggingDivider, !isPaused else { return }
         let current = windowServerFrames(Array(windows.keys))
         removeClosedWindows(current)
         guard !windows.isEmpty else { return }
 
-        let gesture = dragTimer != nil
         if !gesture {
-            guard writers.values.allSatisfy(\.isIdle) else { return }
+            guard windows.values.allSatisfy({ writer($0).isIdle }) else { return }
             reconcile()
         }
 
@@ -107,10 +88,10 @@ final class Controller {
         }
         let changed = leader ?? windows.keys.first { id in
             guard let frame = current[id], let expected = frames[id] else { return false }
-            return differs(frame, expected) && settled[id].map { differs(frame, $0) } ?? true
+            return frame.differs(from: expected) && settled[id].map { frame.differs(from: $0) } ?? true
         }
         guard let changed, let frame = current[changed], let expected = frames[changed] else { return }
-        guard differs(frame, expected) else { return }
+        guard frame.differs(from: expected) else { return }
 
         if gesture { leader = changed }
         cluster.update(changed, to: frame)
@@ -126,7 +107,7 @@ final class Controller {
     private func reconcile() {
         // Decided up front, because adopting one window changes what the others are expected to be.
         let refused = settled.filter { id, actual in
-            !reconciled.contains(id) && written[id].map { differs(actual, $0) } ?? false
+            !reconciled.contains(id) && written[id].map { actual.differs(from: $0) } ?? false
         }
         for (id, actual) in refused {
             guard let expected = cluster.frames[id] else { continue }
@@ -162,51 +143,65 @@ final class Controller {
     private func removeClosedWindows(_ current: [CGWindowID: Rect]) {
         let closed = windows.keys.filter { current[$0] == nil }
         guard !closed.isEmpty else { return }
-        for id in closed {
-            windows[id] = nil
-            written[id] = nil
-            settled[id] = nil
-            if leader == id { leader = nil }
-            if !cluster.remove(id) { windows.removeAll() }
-        }
-        if windows.count < 2 {
-            print("cluster dissolved: fewer than two windows left")
-            stop()
-            exit(0)
-        }
+        closed.forEach(forget)
+        fillGaps()
+    }
+
+    private func forget(_ id: CGWindowID) {
+        windows[id] = nil
+        written[id] = nil
+        settled[id] = nil
+        if leader == id { leader = nil }
+        if !cluster.remove(id) { windows.removeAll() }
+    }
+
+    /// Takes a window out, leaving it wherever it is. Its neighbours fill the space.
+    func detach(_ id: CGWindowID) {
+        forget(id)
+        fillGaps()
+    }
+
+    /// A lone window isn't a cluster any more, so it keeps its size rather than filling the space.
+    private func fillGaps() {
+        if windows.count > 1 { push() }
+        syncPanels()
+    }
+
+    func attach(_ window: AXWindow, size: Rect, at drop: Drop<CGWindowID>) {
+        windows[window.id] = window
+        written[window.id] = nil
+        settled[window.id] = nil
+        reconciled = []
+        cluster.attach(window.id, size: size, at: drop)
         push()
         syncPanels()
+        restack()
+    }
+
+    /// Puts a window back where the layout says it belongs.
+    func restore(_ id: CGWindowID) {
+        written[id] = nil
+        push()
+    }
+
+    /// Records what a window actually ended up as after our last write.
+    func settle(_ id: CGWindowID, at frame: Rect) {
+        settled[id] = frame
     }
 
     private func push(except excluded: CGWindowID? = nil) {
         for (id, frame) in cluster.frames where id != excluded {
-            guard let window = windows[id], let writer = writers[window.pid] else { continue }
+            guard let window = windows[id] else { continue }
             let previous = written[id]
             guard previous != frame else { continue }
             written[id] = frame
-            writer.submit(
+            writer(window).submit(
                 window,
                 frame: frame,
                 setPosition: previous.map { $0.x != frame.x || $0.y != frame.y } ?? true,
                 setSize: previous.map { $0.width != frame.width || $0.height != frame.height } ?? true
             )
         }
-    }
-
-    private func record(_ completion: Writer.Completion, app: String) {
-        var entry = stats.apps[app, default: Stats.App()]
-        entry.writes += 1
-        entry.lagMilliseconds.append(completion.lag * 1000)
-        if let actual = completion.actual {
-            settled[completion.id] = actual
-            if differs(actual, completion.target) { entry.refused += 1 }
-        }
-        stats.apps[app] = entry
-    }
-
-    private func differs(_ a: Rect, _ b: Rect) -> Bool {
-        abs(a.x - b.x) > 0.5 || abs(a.y - b.y) > 0.5
-            || abs(a.width - b.width) > 0.5 || abs(a.height - b.height) > 0.5
     }
 
     private func syncPanels() {
@@ -244,8 +239,23 @@ final class Controller {
         return moved
     }
 
+    /// Raises the cluster's windows to the top of `order`, which runs front to back and starts
+    /// with one of them. That window stays in front.
+    func raise(order: [CGWindowID]) {
+        let visible = order.filter { windows[$0] != nil }
+        guard let front = visible.first, Set(order.prefix(visible.count)) != Set(visible) else { return }
+        let others = visible.dropFirst().compactMap { windows[$0] }
+        guard let frontWindow = windows[front] else { return }
+        // Raising blocks on each app, so it can't happen on the main thread.
+        raiseQueue.async { [weak self] in
+            others.forEach { $0.raise() }
+            frontWindow.raise()
+            DispatchQueue.main.async { self?.restack() }
+        }
+    }
+
     /// Keeps dividers just above the cluster rather than floating over unrelated windows.
-    private func restack() {
+    func restack() {
         guard let front = frontmostWindow(of: Set(windows.keys)) else { return }
         for panel in panels {
             panel.order(.above, relativeTo: Int(front))
