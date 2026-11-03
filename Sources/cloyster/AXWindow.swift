@@ -16,17 +16,21 @@ struct AXWindow: @unchecked Sendable {
     static func all() -> [AXWindow] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
-            .flatMap(windows)
+            .flatMap { windows(of: $0) }
     }
 
-    /// A specific standard window, or nil if it isn't one we can manage.
+    /// A specific standard window, or nil if it isn't one we can manage. Gives up quickly, because
+    /// this runs during gestures and a hung app mustn't freeze them.
     static func find(id: CGWindowID, pid: pid_t) -> AXWindow? {
-        NSRunningApplication(processIdentifier: pid).flatMap { windows(of: $0).first { $0.id == id } }
+        NSRunningApplication(processIdentifier: pid).flatMap { app in
+            windows(of: app, timeout: 0.5).first { $0.id == id }
+        }
     }
 
-    private static func windows(of app: NSRunningApplication) -> [AXWindow] {
+    /// A timeout of zero means the system default.
+    private static func windows(of app: NSRunningApplication, timeout: Float = 0) -> [AXWindow] {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        AXUIElementSetMessagingTimeout(appElement, timeout)
         guard let elements: [AXUIElement] = attribute(appElement, kAXWindowsAttribute) else { return [] }
         return elements.compactMap { element in
             var id: CGWindowID = 0
