@@ -11,8 +11,8 @@ just install
 
 This builds the app, installs it into `/Applications` and restarts it.
 
-Cloyster lives in the menu bar and asks for Accessibility access on first launch. It asks again after
-a rebuild, because the ad-hoc signature changes.
+Cloyster lives in the menu bar and asks for Accessibility access on first launch. The first build
+adds a self-signed certificate to your login keychain, so the permission survives rebuilds.
 
 Hold Cmd and drag a window by its title bar, with the cursor near an edge of another window. A preview
 shows where it will land.

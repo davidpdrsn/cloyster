@@ -1,9 +1,10 @@
 #!/bin/sh
-# Builds build/Cloyster.app. The bundle gives the app its own Accessibility permission, which
-# macOS asks you to grant again after a rebuild because the ad-hoc signature changes.
+# Builds build/Cloyster.app. The bundle gives the app its own Accessibility permission, and signing
+# with a stable identity is what keeps that permission across rebuilds.
 set -eu
 cd "$(dirname "$0")/.."
 
+scripts/create-signing-identity.sh
 swift build -c release --product cloyster
 app=build/Cloyster.app
 rm -rf "$app"
@@ -24,5 +25,5 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app"
+codesign --force --sign "Cloyster Self-Signed" --timestamp=none "$app"
 echo "$app"
