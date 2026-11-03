@@ -25,8 +25,8 @@ public struct Rect: Equatable, Sendable {
         self.height = height
     }
 
-    func low(_ axis: Axis) -> Double { axis == .horizontal ? x : y }
-    func extent(_ axis: Axis) -> Double { axis == .horizontal ? width : height }
+    public func low(_ axis: Axis) -> Double { axis == .horizontal ? x : y }
+    public func extent(_ axis: Axis) -> Double { axis == .horizontal ? width : height }
     func high(_ axis: Axis) -> Double { low(axis) + extent(axis) }
 }
 

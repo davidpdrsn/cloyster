@@ -21,6 +21,10 @@ final class Controller {
     private var dragTimer: Timer?
     private var idleTimer: Timer?
     private var draggingDivider = false
+    private var lastDivider: Divider?
+    /// Windows whose refused size has been adopted since the last gesture. Each gets one turn, so
+    /// two windows that snap to different sizes can't chase each other forever.
+    private var reconciled: Set<CGWindowID> = []
 
     init(cluster: Cluster<CGWindowID>, windows: [AXWindow]) {
         self.cluster = cluster
@@ -62,8 +66,14 @@ final class Controller {
 
     private func mouseDown() {
         leader = nil
+        beginGesture()
         dragTimer?.invalidate()
         dragTimer = schedule(interval: 1.0 / 120)
+    }
+
+    private func beginGesture() {
+        lastDivider = nil
+        reconciled = []
     }
 
     private func mouseUp() {
@@ -86,7 +96,10 @@ final class Controller {
         guard !windows.isEmpty else { return }
 
         let gesture = dragTimer != nil
-        if !gesture, !writers.values.allSatisfy(\.isIdle) { return }
+        if !gesture {
+            guard writers.values.allSatisfy(\.isIdle) else { return }
+            reconcile()
+        }
 
         let frames = cluster.frames
         if let leader {
@@ -105,6 +118,38 @@ final class Controller {
         settled[changed] = nil
         push(except: gesture ? changed : nil)
         syncPanels()
+    }
+
+    /// Windows can refuse a size, by having a minimum or snapping to character cells. Adopts what
+    /// they settled on so the cluster stays aligned. After a divider drag the divider gives way,
+    /// keeping the combined size. Otherwise the window's row or column follows it.
+    private func reconcile() {
+        // Decided up front, because adopting one window changes what the others are expected to be.
+        let refused = settled.filter { id, actual in
+            !reconciled.contains(id) && written[id].map { differs(actual, $0) } ?? false
+        }
+        for (id, actual) in refused {
+            guard let expected = cluster.frames[id] else { continue }
+            reconciled.insert(id)
+            var target = actual
+            if let divider = lastDivider {
+                let axis = divider.axis
+                let excess = actual.extent(axis) - expected.extent(axis)
+                let trailing = expected.low(axis) > divider.frame.low(axis)
+                cluster.moveDivider(divider, by: trailing ? -excess : excess)
+                guard let moved = cluster.frames[id] else { continue }
+                if axis == .horizontal {
+                    target = Rect(x: moved.x, y: actual.y, width: moved.width, height: actual.height)
+                } else {
+                    target = Rect(x: actual.x, y: moved.y, width: actual.width, height: moved.height)
+                }
+            }
+            cluster.update(id, to: target)
+        }
+        if !refused.isEmpty {
+            push()
+            syncPanels()
+        }
     }
 
     private func sampleDrift(_ current: [CGWindowID: Rect], _ frames: [CGWindowID: Rect], leader: CGWindowID) {
@@ -160,7 +205,8 @@ final class Controller {
     }
 
     private func differs(_ a: Rect, _ b: Rect) -> Bool {
-        abs(a.x - b.x) > 1 || abs(a.y - b.y) > 1 || abs(a.width - b.width) > 1 || abs(a.height - b.height) > 1
+        abs(a.x - b.x) > 0.5 || abs(a.y - b.y) > 0.5
+            || abs(a.width - b.width) > 0.5 || abs(a.height - b.height) > 0.5
     }
 
     private func syncPanels() {
@@ -176,7 +222,10 @@ final class Controller {
                     self?.draggingDivider = false
                     self?.restack()
                 },
-                onBegin: { [weak self] in self?.draggingDivider = true }
+                onBegin: { [weak self] in
+                    self?.beginGesture()
+                    self?.draggingDivider = true
+                }
             )
             panels.append(panel)
             panel.orderFront(nil)
@@ -189,6 +238,7 @@ final class Controller {
 
     private func moveDivider(_ divider: Divider, by delta: Double) -> Double {
         let moved = cluster.moveDivider(divider, by: delta)
+        lastDivider = divider
         push()
         syncPanels()
         return moved
