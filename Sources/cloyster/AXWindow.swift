@@ -127,23 +127,8 @@ func windowServerFrames(_ ids: [CGWindowID]) -> [CGWindowID: Rect] {
     return result
 }
 
-/// The frontmost of `ids`, by on-screen stacking order.
-func frontmostWindow(of ids: Set<CGWindowID>) -> CGWindowID? {
-    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
-        return nil
-    }
-    return infos.lazy.compactMap { $0[kCGWindowNumber] as? CGWindowID }.first(where: ids.contains)
-}
-
-struct WindowHit {
-    let id: CGWindowID
-    let pid: pid_t
-    let frame: Rect
-}
-
 /// Visible normal windows, front to back, leaving out our own.
-func normalWindows() -> [WindowHit] {
+func normalWindows() -> [WindowInfo] {
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
         return []
@@ -157,14 +142,9 @@ func normalWindows() -> [WindowHit] {
             let bounds = info[kCGWindowBounds],
             let rect = CGRect(dictionaryRepresentation: bounds as! CFDictionary)
         else { return nil }
-        return WindowHit(
+        return WindowInfo(
             id: id, pid: pid,
             frame: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height)
         )
     }
-}
-
-/// The frontmost normal window at a point.
-func topWindow(atX x: Double, y: Double, excluding excluded: CGWindowID? = nil) -> WindowHit? {
-    normalWindows().first { $0.id != excluded && $0.frame.contains(x: x, y: y) }
 }

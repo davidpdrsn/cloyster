@@ -37,6 +37,47 @@ func screenRect(_ rect: Rect) -> NSRect {
     return NSRect(x: rect.x, y: primaryHeight - rect.y - rect.height, width: rect.width, height: rect.height)
 }
 
+/// The dividers of one cluster.
+final class PanelSurface: ClusterSurface {
+    private let handlers: DividerHandlers
+    private var panels: [DividerPanel] = []
+
+    init(handlers: DividerHandlers) {
+        self.handlers = handlers
+    }
+
+    func show(_ dividers: [Divider]) {
+        while panels.count > dividers.count {
+            panels.removeLast().close()
+        }
+        while panels.count < dividers.count {
+            let panel = DividerPanel(
+                divider: dividers[panels.count],
+                onDrag: handlers.onDrag,
+                onEnd: handlers.onEnd,
+                onBegin: handlers.onBegin
+            )
+            panels.append(panel)
+            panel.orderFront(nil)
+        }
+        for (panel, divider) in zip(panels, dividers) {
+            panel.divider = divider
+            panel.place(divider.frame)
+        }
+    }
+
+    func restack(above front: WindowID) {
+        for panel in panels {
+            panel.order(.above, relativeTo: Int(front))
+        }
+    }
+
+    func close() {
+        panels.forEach { $0.close() }
+        panels = []
+    }
+}
+
 /// Shows where a dragged window will land.
 final class JoinPreview: NSPanel {
     init() {

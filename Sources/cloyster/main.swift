@@ -54,7 +54,7 @@ func run(layout: String, frame: Rect) -> Never {
     guard let spec = Node<String>.parse(layout) else { fail("invalid layout: \(layout)") }
     var available = AXWindow.all()
     var chosen: [AXWindow] = []
-    let root = spec.mapWindows { (leaf: String) -> CGWindowID? in
+    let root = spec.mapWindows { (leaf: String) -> WindowID? in
         let isMatch: (AXWindow) -> Bool = { window in
             if let id = CGWindowID(leaf) { return window.id == id }
             return window.appName.caseInsensitiveCompare(leaf) == .orderedSame
@@ -68,21 +68,21 @@ func run(layout: String, frame: Rect) -> Never {
     }
     guard let root else { fail("invalid layout: \(layout)") }
 
-    let manager = Manager()
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    manager.start()
-    manager.add(Cluster(root: root, frame: frame), windows: chosen)
-    runUntilSignalled(manager)
+    let driver = Driver()
+    NSApplication.shared.setActivationPolicy(.accessory)
+    driver.start()
+    driver.system.register(chosen)
+    driver.manager.add(Cluster(root: root, frame: frame))
+    runUntilSignalled(driver)
 }
 
-func runUntilSignalled(_ manager: Manager) -> Never {
+func runUntilSignalled(_ driver: Driver) -> Never {
     var sources: [DispatchSourceSignal] = []
     for number in [SIGINT, SIGTERM] {
         signal(number, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
-            manager.stop()
+            driver.stop()
             exit(0)
         }
         source.resume()
@@ -93,22 +93,21 @@ func runUntilSignalled(_ manager: Manager) -> Never {
 }
 
 func runMenuBarApp() -> Never {
-    let manager = Manager()
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-    let menu = StatusMenu(manager: manager, isTrusted: AXIsProcessTrusted)
+    let driver = Driver()
+    NSApplication.shared.setActivationPolicy(.accessory)
+    let menu = StatusMenu(driver: driver, isTrusted: AXIsProcessTrusted)
 
     let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
     if AXIsProcessTrustedWithOptions(prompt) {
-        manager.start()
+        driver.start()
     } else {
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
             guard AXIsProcessTrusted() else { return }
             timer.invalidate()
-            manager.start()
+            driver.start()
         }
     }
-    withExtendedLifetime(menu) { runUntilSignalled(manager) }
+    withExtendedLifetime(menu) { runUntilSignalled(driver) }
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())

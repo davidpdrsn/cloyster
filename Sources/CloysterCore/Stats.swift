@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the prototype exists to find out: how far windows fall behind, and which apps refuse sizes.
-final class Stats {
+public final class Stats {
     struct App {
         var writes = 0
         var lagMilliseconds: [Double] = []
@@ -12,7 +12,9 @@ final class Stats {
     /// Distance in points between where a follower is and where it should be, sampled during drags.
     var drift: [Double] = []
 
-    func report(coalesced: Int) -> String {
+    public init() {}
+
+    public func report(coalesced: Int) -> String {
         var lines = ["app                       writes  lag p50/p95/max ms  refused"]
         for (name, app) in apps.sorted(by: { $0.key < $1.key }) {
             lines.append(

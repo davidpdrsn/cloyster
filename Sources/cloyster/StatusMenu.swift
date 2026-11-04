@@ -1,13 +1,15 @@
 import AppKit
+import CloysterCore
 
 /// The menu bar icon and everything in its menu.
 final class StatusMenu: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    private let manager: Manager
+    private let driver: Driver
+    private var manager: Manager { driver.manager }
     private let isTrusted: () -> Bool
 
-    init(manager: Manager, isTrusted: @escaping () -> Bool) {
-        self.manager = manager
+    init(driver: Driver, isTrusted: @escaping () -> Bool) {
+        self.driver = driver
         self.isTrusted = isTrusted
         super.init()
         item.button?.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Cloyster")
@@ -71,7 +73,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
 
     @objc private func quit() {
-        manager.stop()
+        driver.stop()
         NSApp.terminate(nil)
     }
 }
