@@ -93,10 +93,12 @@ public final class Controller {
         if let leader {
             sampleDrift(current, frames, leader: leader)
         }
-        let changed = leader ?? windows.first { id in
+        let moved = windows.filter { id in
             guard let frame = current[id], let expected = frames[id] else { return false }
             return frame.differs(from: expected) && settled[id].map { frame.differs(from: $0) } ?? true
         }
+        // People move one window at a time. Several at once means the system is rearranging them.
+        let changed = leader ?? (moved.count == 1 ? moved.first : nil)
         guard let changed, let frame = current[changed], let expected = frames[changed] else { return }
         guard frame.differs(from: expected) else { return }
 

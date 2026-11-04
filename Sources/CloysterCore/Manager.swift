@@ -22,6 +22,7 @@ public final class Manager {
     /// The window under the cursor when the mouse went down, until a join claims it.
     private var pressed: WindowInfo?
     private var lastFront: WindowID?
+    private var isSuspended = false
 
     public init(system: WindowSystem) {
         self.system = system
@@ -59,8 +60,22 @@ public final class Manager {
         stats.apps[result.app] = entry
     }
 
+    /// Stops reacting to windows, for when the system rearranges them like Mission Control does.
+    public func suspend() {
+        isSuspended = true
+        endJoin()
+        pressed = nil
+        mouseIsDown = false
+        controllers.forEach { $0.endGesture() }
+    }
+
+    public func resume() {
+        isSuspended = false
+    }
+
     /// Call regularly, and much more often while the mouse is down.
     public func poll() {
+        guard !isSuspended else { return }
         if mouseIsDown { beginJoinIfCommandHeld() }
         controllers.forEach { $0.poll(gesture: mouseIsDown) }
         sweep()
@@ -70,7 +85,7 @@ public final class Manager {
     /// Brings a whole cluster forward when one of its windows reaches the front. Works from the
     /// stacking order, so it doesn't matter whether that was a click, Cmd+Tab or anything else.
     public func raiseFrontCluster() {
-        guard join == nil else { return }
+        guard join == nil, !isSuspended else { return }
         let order = system.normalWindows().map(\.id)
         guard let front = order.first, front != lastFront else { return }
         lastFront = front
@@ -84,6 +99,7 @@ public final class Manager {
     }
 
     public func mouseDown() {
+        guard !isSuspended else { return }
         controllers.forEach { $0.beginGesture() }
         pressed = system.cursor.flatMap(topWindow)
         mouseIsDown = true

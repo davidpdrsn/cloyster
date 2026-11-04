@@ -8,6 +8,7 @@ final class Driver {
     private var idleTimer: Timer?
     private var dragTimer: Timer?
     private var joinTimer: Timer?
+    private var missionControl: MissionControlObserver?
 
     init() {
         manager = Manager(system: system)
@@ -20,6 +21,9 @@ final class Driver {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.manager.raiseFrontCluster() }
+        missionControl = MissionControlObserver { [manager] isOpen in
+            if isOpen { manager.suspend() } else { manager.resume() }
+        }
         idleTimer = schedule(interval: 0.2) { [weak self] in self?.manager.poll() }
     }
 
