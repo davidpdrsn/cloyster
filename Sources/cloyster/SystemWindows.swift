@@ -28,11 +28,13 @@ final class SystemWindows: WindowSystem {
 
     /// Reads the keyboard rather than mouse events, because tools that rewrite mouse input can
     /// drop the flag, and Cmd may go down after the drag has started. Those rewritten events can
-    /// clear the session's flags too, so the hardware state counts as well.
+    /// clear the session's flags too, so the hardware state counts as well. Cmd has to be on its
+    /// own, because combinations like Opt+Cmd belong to other tools.
     var commandHeld: Bool {
-        [.combinedSessionState, .hidSystemState].contains {
-            CGEventSource.flagsState($0).contains(.maskCommand)
-        }
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+            .union(CGEventSource.flagsState(.hidSystemState))
+        return flags.contains(.maskCommand)
+            && flags.isDisjoint(with: [.maskAlternate, .maskControl, .maskShift])
     }
 
     func frames(of ids: [WindowID]) -> [WindowID: Rect] {

@@ -15,7 +15,8 @@ Cloyster lives in the menu bar and asks for Accessibility access on first launch
 adds a self-signed certificate to your login keychain, so the permission survives rebuilds.
 
 Hold Cmd and drag a window by its title bar, with the cursor near an edge of another window. Cmd can
-go down before or during the drag. A preview shows where it will land.
+go down before or during the drag, and has to be the only modifier held. A preview shows where it
+will land.
 
 - Release to join. Near a cluster's outer edge, the window runs along that whole side.
 - Let go of Cmd first to cancel.
